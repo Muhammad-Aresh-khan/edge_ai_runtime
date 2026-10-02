@@ -1,0 +1,17 @@
+__pycache__
+*.pyc
+*.pyo
+*.pyd
+.Python
+env/
+venv/
+.venv/
+.git
+.gitignore
+.env
+tests/
+runs/
+*.pdf
+generate_pdf_doc.py
+data/alerts/*.jpg
+data/outputs/*.jpg
