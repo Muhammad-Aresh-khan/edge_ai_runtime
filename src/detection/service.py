@@ -11,12 +11,21 @@ import time
 import math
 import base64
 import json
+import gc
 import threading
 import subprocess
 from typing import List, Tuple, Dict, Optional, Any
 import cv2
 import numpy as np
 from groq import Groq
+
+# Memory optimization for 512MB RAM cloud environments (Render Free Tier)
+try:
+    import torch
+    torch.set_num_threads(1)
+    torch.set_grad_enabled(False)
+except Exception:
+    pass
 
 from src.config import (
     DEFAULT_TODDLER_MODEL,
@@ -240,15 +249,22 @@ class ToddlerSafetyEngine:
 
         self.model_danger = None
         self.model_toddler = None
-        self._load_models()
 
-    def _load_models(self):
-        from ultralytics import YOLO
-        print(f"[Engine] Loading Danger Zone model: {self.danger_model_path}...")
-        self.model_danger = YOLO(self.danger_model_path)
-        print(f"[Engine] Loading Toddler Detection model: {self.toddler_model_path}...")
-        self.model_toddler = YOLO(self.toddler_model_path)
-        print("[Engine] Both models loaded successfully!")
+    def get_toddler_model(self):
+        if self.model_toddler is None:
+            from ultralytics import YOLO
+            print(f"[Engine] Lazy-loading Toddler model: {self.toddler_model_path}...")
+            self.model_toddler = YOLO(self.toddler_model_path)
+            print("[Engine] Toddler model ready.")
+        return self.model_toddler
+
+    def get_danger_model(self):
+        if self.model_danger is None:
+            from ultralytics import YOLO
+            print(f"[Engine] Lazy-loading Hazard model: {self.danger_model_path}...")
+            self.model_danger = YOLO(self.danger_model_path)
+            print("[Engine] Hazard model ready.")
+        return self.model_danger
 
     def _trigger_audio_alert(self, freq: int = 1200, duration_ms: int = 400):
         if not self.enable_sound or not HAS_WINSOUND:
@@ -341,9 +357,10 @@ class ToddlerSafetyEngine:
         augment: bool = False,
     ) -> List[DetectionBox]:
         h, w = frame.shape[:2]
-        target_imgsz = imgsz if imgsz is not None else (1024 if max(h, w) >= 900 else 800)
+        target_imgsz = imgsz if imgsz is not None else 480
         base_thresh = min(conf_thresh, 0.10)
-        results = self.model_danger(
+        danger_model = self.get_danger_model()
+        results = danger_model(
             frame, imgsz=target_imgsz, conf=base_thresh, augment=augment, verbose=False
         )[0]
 
@@ -374,9 +391,10 @@ class ToddlerSafetyEngine:
         imgsz: Optional[int] = None,
         augment: bool = False,
     ) -> List[DetectionBox]:
-        target_imgsz = imgsz if imgsz is not None else 640
+        target_imgsz = imgsz if imgsz is not None else 480
         base_thresh = min(conf_thresh, 0.10)
-        results = self.model_toddler(
+        toddler_model = self.get_toddler_model()
+        results = toddler_model(
             frame, imgsz=target_imgsz, conf=base_thresh, augment=augment, verbose=False
         )[0]
 

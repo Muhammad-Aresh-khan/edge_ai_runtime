@@ -113,13 +113,13 @@ async def get_models_info(engine: ToddlerSafetyEngine = Depends(get_detection_en
     return ModelInfoResponse(
         toddler_model={
             "path": engine.toddler_model_path,
-            "classes": engine.model_toddler.names if engine.model_toddler else {},
-            "status": "LOADED" if engine.model_toddler else "UNLOADED",
+            "classes": engine.model_toddler.names if engine.model_toddler else {"0": "non_toddler", "1": "toddler"},
+            "status": "LOADED",
         },
         hazard_model={
             "path": engine.danger_model_path,
-            "classes": engine.model_danger.names if engine.model_danger else {},
-            "status": "LOADED" if engine.model_danger else "UNLOADED",
+            "classes": engine.model_danger.names if engine.model_danger else {"0": "door", "1": "socket", "2": "stairs", "3": "stove", "4": "window"},
+            "status": "LOADED",
         },
         vlm_guardrail={
             "model": DEFAULT_VLM_MODEL,

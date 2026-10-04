@@ -3,10 +3,22 @@ FastAPI Main Application
 Includes feature module routers: Funnel, Detection, Training
 """
 
+import os
 import time
 from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+
+# Optimize PyTorch and C runtime memory allocations for low-RAM cloud instances (Render 512MB)
+os.environ["OMP_NUM_THREADS"] = "1"
+os.environ["MKL_NUM_THREADS"] = "1"
+os.environ["OPENBLAS_NUM_THREADS"] = "1"
+try:
+    import torch
+    torch.set_num_threads(1)
+    torch.set_grad_enabled(False)
+except Exception:
+    pass
 
 from src.detection.service import get_detection_engine, get_vlm_guard
 from src.detection.router import router as detection_router
@@ -16,10 +28,7 @@ from src.training.router import router as training_router
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    print("[FastAPI] Pre-warming YOLO models and VLM guardrail...")
-    get_detection_engine()
-    get_vlm_guard()
-    print("[FastAPI] Models pre-warmed and ready to serve!")
+    print("[FastAPI] Server booted with lightweight memory profile (models lazy-loaded).")
     yield
     print("[FastAPI] Shutting down SafeChild Vision API server.")
 
@@ -54,6 +63,7 @@ app.include_router(detection_router, prefix="/api/v1")
 app.include_router(training_router, prefix="/api/v1")
 
 
+@app.head("/", include_in_schema=False)
 @app.get("/", tags=["Health & Metadata"])
 async def root():
     return {
@@ -75,6 +85,7 @@ async def root():
     }
 
 
+@app.head("/health", include_in_schema=False)
 @app.get("/health", tags=["Health & Metadata"])
 async def health_check():
     return {"status": "ok", "timestamp": time.time()}

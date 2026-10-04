@@ -20,7 +20,7 @@ from src.config import (
 from src.detection.service import ToddlerSafetyEngine
 
 
-def run_image_mode(engine: ToddlerSafetyEngine, source_path: str, save_output: bool = True):
+def run_image_mode(engine: ToddlerSafetyEngine, source_path: str, save_output: bool = True, show_display: bool = True):
     print(f"\n==========================================")
     print(f"  [MODE 1: IMAGE TEST] Processing: {source_path}")
     print(f"==========================================")
@@ -50,11 +50,12 @@ def run_image_mode(engine: ToddlerSafetyEngine, source_path: str, save_output: b
         cv2.imwrite(out_path, annotated_frame)
         print(f"[Saved] Annotated output saved to: {out_path}")
 
-    # Show window
-    print("\n[Display] Press any key on image window to close...")
-    cv2.imshow(f"Toddler Danger Monitor - {os.path.basename(source_path)}", annotated_frame)
-    cv2.waitKey(0)
-    cv2.destroyAllWindows()
+    # Show window if enabled
+    if show_display:
+        print("\n[Display] Press any key on image window to close...")
+        cv2.imshow(f"Toddler Danger Monitor - {os.path.basename(source_path)}", annotated_frame)
+        cv2.waitKey(0)
+        cv2.destroyAllWindows()
 
 
 def run_video_mode(engine: ToddlerSafetyEngine, source_path: str, save_video: bool = False):
@@ -187,6 +188,8 @@ def main():
                         help="Save annotated video output")
     parser.add_argument("--no-sound", action="store_true",
                         help="Disable audio buzzer")
+    parser.add_argument("--no-display", action="store_true",
+                        help="Disable GUI window popup (useful for headless / automated runs)")
 
     args = parser.parse_args()
 
@@ -199,7 +202,7 @@ def main():
     )
 
     if args.mode == "image":
-        run_image_mode(engine, args.source)
+        run_image_mode(engine, args.source, show_display=not args.no_display)
     elif args.mode == "video":
         run_video_mode(engine, args.source, save_video=args.save)
     elif args.mode == "webcam":
