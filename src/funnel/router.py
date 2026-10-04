@@ -16,7 +16,7 @@ router = APIRouter(prefix="/funnel", tags=["Full Funnel Pipeline"])
 
 
 @router.post("/analyze-image", response_model=FunnelAnalysisResponse)
-async def analyze_image(
+def analyze_image(
     file: UploadFile = File(..., description="Target image file (JPEG/PNG)"),
     child_name: str = Form("Toddler", description="Child's name for personalized alert"),
     vlm_guardrail: bool = Form(True, description="Enable Qwen Vision LLM Cognitive Guardrail"),
@@ -24,7 +24,7 @@ async def analyze_image(
     return_annotated_image: bool = Form(True, description="Return base64 encoded annotated image"),
     service: FunnelService = Depends(get_funnel_service),
 ):
-    contents = await file.read()
+    contents = file.file.read()
     nparr = np.frombuffer(contents, np.uint8)
     frame = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
     if frame is None:
@@ -40,14 +40,14 @@ async def analyze_image(
 
 
 @router.post("/analyze-frame")
-async def analyze_frame_fast(
+def analyze_frame_fast(
     file: UploadFile = File(..., description="Streaming video frame"),
     child_name: str = Form("Toddler"),
     vlm_on_danger_only: bool = Form(True, description="Only invoke VLM when YOLO detects DANGER/WARNING"),
     engine: ToddlerSafetyEngine = Depends(get_detection_engine),
     vlm: GroqVLMGuard = Depends(get_vlm_guard),
 ):
-    contents = await file.read()
+    contents = file.file.read()
     nparr = np.frombuffer(contents, np.uint8)
     frame = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
     if frame is None:

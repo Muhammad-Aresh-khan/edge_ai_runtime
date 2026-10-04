@@ -37,12 +37,12 @@ def _box_to_item(box: DetectionBox) -> DetectionItem:
 
 
 @router.post("/toddler/detect", response_model=SingleModelDetectionResponse)
-async def detect_toddler_only(
+def detect_toddler_only(
     file: UploadFile = File(..., description="Image to test toddler detection"),
     conf_thresh: float = Form(DEFAULT_CONF_THRESHOLD, ge=0.01, le=1.0),
     engine: ToddlerSafetyEngine = Depends(get_detection_engine),
 ):
-    contents = await file.read()
+    contents = file.file.read()
     nparr = np.frombuffer(contents, np.uint8)
     frame = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
     if frame is None:
@@ -62,12 +62,12 @@ async def detect_toddler_only(
 
 
 @router.post("/hazard/detect", response_model=SingleModelDetectionResponse)
-async def detect_hazards_only(
+def detect_hazards_only(
     file: UploadFile = File(..., description="Image to test danger zone detection"),
     conf_thresh: float = Form(DEFAULT_CONF_THRESHOLD, ge=0.01, le=1.0),
     engine: ToddlerSafetyEngine = Depends(get_detection_engine),
 ):
-    contents = await file.read()
+    contents = file.file.read()
     nparr = np.frombuffer(contents, np.uint8)
     frame = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
     if frame is None:
@@ -87,13 +87,13 @@ async def detect_hazards_only(
 
 
 @router.post("/vlm/verify")
-async def verify_vlm_only(
+def verify_vlm_only(
     file: UploadFile = File(..., description="Image to evaluate with VLM Guardrail"),
     child_name: str = Form("Toddler"),
     candidate_hazard: str = Form("none"),
     vlm: GroqVLMGuard = Depends(get_vlm_guard),
 ):
-    contents = await file.read()
+    contents = file.file.read()
     nparr = np.frombuffer(contents, np.uint8)
     frame = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
     if frame is None:
