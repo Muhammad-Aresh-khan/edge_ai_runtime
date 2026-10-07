@@ -28,10 +28,8 @@ wheels/
 venv/
 env/
 ENV/
-.env
 
 # IDEs
-.vscode/
 .idea/
 
 # YOLO training runs
@@ -41,3 +39,5 @@ runs/
 # Snapshots & Runtime Data (keep structure, ignore generated dumps)
 data/alerts/*.jpg
 data/outputs/*.jpg
+config.bat
+node_modules

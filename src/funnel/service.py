@@ -24,6 +24,7 @@ from src.funnel.schemas import (
     VLMVerificationDetail,
     LatencyBreakdown,
 )
+from src.funnel.zone_manager import get_room_zones
 
 
 def _box_to_item(box: DetectionBox) -> DetectionItem:
@@ -45,6 +46,7 @@ class FunnelService:
     ):
         self.engine = engine or get_detection_engine()
         self.vlm = vlm or get_vlm_guard()
+        self.last_annotated_jpeg: Optional[bytes] = None
 
     def process_image(
         self,
@@ -52,27 +54,71 @@ class FunnelService:
         child_name: str = "Toddler",
         vlm_guardrail: bool = True,
         warning_buffer_px: int = DEFAULT_WARNING_BUFFER_PX,
-        return_annotated_image: bool = True,
+        camera_id: str = "default_camera",
     ) -> FunnelAnalysisResponse:
         total_t0 = time.time()
         self.engine.warning_buffer_px = warning_buffer_px
 
-        # Stage 1 & 2: Edge YOLO Inference
+        # Stage 1: Edge Toddler Inference
         t0_toddler = time.time()
         toddlers = self.engine.detect_toddlers(frame, conf_thresh=DEFAULT_CONF_THRESHOLD)
         t_toddler_ms = (time.time() - t0_toddler) * 1000
 
+        # Stage 1.5: Toddler Arbiter Validation (VLM only verifies & refines child candidate)
+        vlm_ms = 0.0
+        arbiter_reason = ""
+        is_child_verified = len(toddlers) > 0
+        if vlm_guardrail and toddlers:
+            t0_vlm = time.time()
+            cand_box = toddlers[0].box
+            arbiter_res = self.vlm.verify_and_refine_toddler(frame, cand_box)
+            vlm_ms = (time.time() - t0_vlm) * 1000
+            if not arbiter_res.get("is_child", True):
+                # Discard false alarm detection
+                toddlers = []
+                is_child_verified = False
+                arbiter_reason = "VLM Arbiter: Candidate is not a real toddler (false alarm filtered)"
+            else:
+                is_child_verified = True
+                arbiter_reason = arbiter_res.get("reason", "Toddler verified by VLM arbiter")
+                if "refined_box" in arbiter_res and arbiter_res["refined_box"]:
+                    rb = arbiter_res["refined_box"]
+                    toddlers[0].box = tuple(rb)
+
+        # Stage 2: Static Room Hazards (from Setup) or Dynamic YOLO Fallback
         t0_hazard = time.time()
-        hazards = self.engine.detect_hazards(frame, conf_thresh=DEFAULT_CONF_THRESHOLD)
+        active_zones = get_room_zones(camera_id)
+        if active_zones and active_zones.get("hazards"):
+            hazards = [
+                DetectionBox(
+                    cls_id=i + 1,
+                    cls_name=z.get("label", "hazard"),
+                    conf=1.0,
+                    box=tuple(z["box"]) if isinstance(z.get("box"), (list, tuple)) else (0, 0, 0, 0),
+                )
+                for i, z in enumerate(active_zones["hazards"])
+            ]
+        else:
+            hazards = self.engine.detect_hazards(frame, conf_thresh=DEFAULT_CONF_THRESHOLD)
         t_hazard_ms = (time.time() - t0_hazard) * 1000
 
-        # Stage 3: Ground-Plane Spatial Fusion
+        # Stage 3: Ground-Plane Spatial Fusion (DANGER CALCULATED 100% BY CODE MATHS)
         t0_spatial = time.time()
         severity, alert_events = self.engine.evaluate_safety(toddlers, hazards)
         t_spatial_ms = (time.time() - t0_spatial) * 1000
 
         primary_hazard = alert_events[0].hazard_name if alert_events else (hazards[0].cls_name if hazards else None)
-        alert_msg = alert_events[0].message if alert_events else "All areas safe"
+
+        # Pure Code-Generated Deterministic Alert Message (No LLM Overwrite)
+        if not toddlers:
+            alert_msg = "No toddler detected in camera view"
+        elif severity == "DANGER":
+            alert_msg = f"DANGER: {child_name} is in critical proximity to {primary_hazard.upper()}!"
+        elif severity == "WARNING":
+            dist = alert_events[0].distance_px if alert_events else self.engine.warning_buffer_px
+            alert_msg = f"WARNING: {child_name} is approaching {primary_hazard.upper()} ({int(dist)}px away)"
+        else:
+            alert_msg = f"SAFE: {child_name} is playing safely away from hazard zones"
 
         # Spatial Details
         spatial_details = []
@@ -93,55 +139,15 @@ class FunnelService:
                     )
                 )
 
-        # Stage 4: Cognitive Vision LLM Guardrail
-        vlm_detail = None
-        vlm_ms = 0.0
+        # Stage 4: VLM Toddler Arbiter Detail (Reports ONLY Toddler Validation)
+        vlm_detail = VLMVerificationDetail(
+            enabled=vlm_guardrail,
+            child_verified=is_child_verified,
+            explanation=arbiter_reason or ("Child verified by VLM" if toddlers else "No child detected"),
+            latency_sec=round(vlm_ms / 1000, 2),
+        )
+
         final_severity = severity
-
-        if vlm_guardrail:
-            t0_vlm = time.time()
-            vlm_res = self.vlm.verify_safety(
-                frame_bgr=frame,
-                child_name=child_name,
-                yolo_severity=severity,
-                yolo_hazard=primary_hazard or "none",
-            )
-            vlm_ms = (time.time() - t0_vlm) * 1000
-
-            vlm_detail = VLMVerificationDetail(
-                enabled=True,
-                success=vlm_res.get("success", False),
-                child_detected=vlm_res.get("child_detected", len(toddlers) > 0),
-                is_real_danger=vlm_res.get("is_real_danger", severity == "DANGER"),
-                verified_severity=vlm_res.get("verified_severity", severity),
-                verified_hazard=vlm_res.get("verified_hazard", primary_hazard or "none"),
-                explanation=vlm_res.get("explanation", ""),
-                extra_hazards=vlm_res.get("extra_hazards", []),
-                latency_sec=vlm_res.get("latency_sec", round(vlm_ms / 1000, 2)),
-            )
-
-            # Reconcile final severity
-            if not vlm_res.get("child_detected", True):
-                final_severity = "IDLE"
-                alert_msg = "No child detected in camera view"
-            elif severity == "DANGER" and not vlm_res.get("is_real_danger", True):
-                final_severity = "SAFE"
-                alert_msg = f"False Alarm Filtered: {child_name} is playing safely away from hazard"
-            elif vlm_res.get("verified_severity") in ("DANGER", "WARNING"):
-                final_severity = vlm_res.get("verified_severity")
-                alert_msg = f"{final_severity}: {vlm_res.get('explanation', alert_msg)}"
-        else:
-            vlm_detail = VLMVerificationDetail(
-                enabled=False,
-                success=True,
-                child_detected=len(toddlers) > 0,
-                is_real_danger=severity == "DANGER",
-                verified_severity=severity,
-                verified_hazard=primary_hazard or "none",
-                explanation="VLM Guardrail bypassed by user toggle.",
-                extra_hazards=[],
-                latency_sec=0.0,
-            )
 
         # Stage 5: Alert, TTS & Snapshot
         tts_sentence = build_tts_message(final_severity, child_name, primary_hazard or "")
@@ -149,18 +155,17 @@ class FunnelService:
         if final_severity == "DANGER" and self.engine.save_alerts:
             self.engine._save_alert_snapshot(frame, primary_hazard or "hazard")
 
-        annotated_base64 = None
-        if return_annotated_image:
-            annotated_frame = self.engine.draw_hud_and_annotations(
-                frame=frame,
-                toddlers=toddlers,
-                hazards=hazards,
-                overall_severity=final_severity,
-                alert_events=alert_events,
-                fps=0.0,
-            )
-            _, buffer = cv2.imencode(".jpg", annotated_frame, [cv2.IMWRITE_JPEG_QUALITY, 85])
-            annotated_base64 = base64.b64encode(buffer).decode("utf-8")
+        # Draw HUD & cache frame for the /latest-image endpoint (0ms overhead)
+        annotated_frame = self.engine.draw_hud_and_annotations(
+            frame=frame,
+            toddlers=toddlers,
+            hazards=hazards,
+            overall_severity=final_severity,
+            alert_events=alert_events,
+            fps=0.0,
+        )
+        _, buffer = cv2.imencode(".jpg", annotated_frame, [cv2.IMWRITE_JPEG_QUALITY, 85])
+        self.last_annotated_jpeg = buffer.tobytes()
 
         total_pipeline_ms = (time.time() - total_t0) * 1000
 
@@ -185,7 +190,6 @@ class FunnelService:
                 vlm_guard_ms=round(vlm_ms, 1),
                 total_pipeline_ms=round(total_pipeline_ms, 1),
             ),
-            annotated_image_base64=annotated_base64,
         )
 
 

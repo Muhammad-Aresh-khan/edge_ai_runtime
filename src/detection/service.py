@@ -213,6 +213,132 @@ Return ONLY a valid JSON object matching this schema:
                 "model": self.model,
             }
 
+    def detect_room_hazard_zones(self, frame_bgr: np.ndarray) -> List[Dict[str, Any]]:
+        """
+        Uses Groq Qwen Vision to ground and detect all household hazard zones in a room photo.
+        Returns pixel bounding boxes [x1, y1, x2, y2].
+        """
+        h, w = frame_bgr.shape[:2]
+        base64_img = self._frame_to_base64(frame_bgr)
+        prompt = (
+            "You are a household toddler safety visual grounding model.\n"
+            "Identify all danger zones in this room (window, stairs, electrical sockets, stove, balcony, sharp furniture).\n"
+            "For each danger zone, provide the exact bounding box in normalized [ymin, xmin, ymax, xmax] coordinates from 0 to 1000.\n"
+            "Return valid JSON ONLY with this schema:\n"
+            '{"hazards": [{"label": "window", "box_1000": [ymin, xmin, ymax, xmax], "risk": "high"}]}'
+        )
+        try:
+            response = self.client.chat.completions.create(
+                model=self.model,
+                messages=[{
+                    "role": "user",
+                    "content": [
+                        {"type": "text", "text": prompt},
+                        {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{base64_img}"}}
+                    ]
+                }],
+                temperature=0.1,
+                max_tokens=250,
+                response_format={"type": "json_object"}
+            )
+            data = json.loads(response.choices[0].message.content)
+            raw_hazards = data.get("hazards", [])
+            parsed_zones = []
+            for i, item in enumerate(raw_hazards, 1):
+                label = item.get("label", "hazard").lower()
+                box_1000 = item.get("box_1000", [0, 0, 0, 0])
+                if len(box_1000) == 4:
+                    ymin, xmin, ymax, xmax = box_1000
+                    x1 = int(xmin * w / 1000)
+                    y1 = int(ymin * h / 1000)
+                    x2 = int(xmax * w / 1000)
+                    y2 = int(ymax * h / 1000)
+                    parsed_zones.append({
+                        "id": f"zone_{i}",
+                        "label": label,
+                        "risk": item.get("risk", "high"),
+                        "box": [max(0, x1), max(0, y1), min(w, x2), min(h, y2)],
+                        "box_normalized": box_1000,
+                    })
+            return parsed_zones
+        except Exception as e:
+            print(f"[VLMGuard] Grounding error: {e}")
+            return []
+
+    def verify_and_refine_toddler(
+        self,
+        frame_bgr: np.ndarray,
+        candidate_box_xyxy: Optional[List[int]] = None,
+    ) -> Dict[str, Any]:
+        """
+        Validates if candidate toddler detection is a real child.
+        If invalid, detects false alarm or provides refined coordinates.
+        """
+        h, w = frame_bgr.shape[:2]
+        base64_img = self._frame_to_base64(frame_bgr)
+
+        cand_norm = None
+        if candidate_box_xyxy and len(candidate_box_xyxy) == 4:
+            cx1, cy1, cx2, cy2 = candidate_box_xyxy
+            cand_norm = [int(cy1 * 1000 / h), int(cx1 * 1000 / w), int(cy2 * 1000 / h), int(cx2 * 1000 / w)]
+
+        prompt = f"""You are a child safety vision arbiter.
+A detector proposed candidate child bounding box in normalized [ymin, xmin, ymax, xmax] (0 to 1000 scale): {cand_norm}
+
+Task:
+1. Is there a real human toddler/child in or near this candidate area? (valid: true/false)
+2. If true, refine the exact bounding box of the child: [ymin, xmin, ymax, xmax].
+3. If false (e.g. pillow/toy/furniture), set valid=false and if a child exists elsewhere in the image, provide their box; otherwise return null.
+
+Return JSON ONLY:
+{{
+  "is_valid_child": true,
+  "confidence": 0.95,
+  "final_toddler_box_1000": [ymin, xmin, ymax, xmax],
+  "reason": "concise explanation"
+}}"""
+        try:
+            response = self.client.chat.completions.create(
+                model=self.model,
+                messages=[{
+                    "role": "user",
+                    "content": [
+                        {"type": "text", "text": prompt},
+                        {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{base64_img}"}}
+                    ]
+                }],
+                temperature=0.1,
+                max_tokens=150,
+                response_format={"type": "json_object"}
+            )
+            data = json.loads(response.choices[0].message.content)
+            box_1000 = data.get("final_toddler_box_1000")
+            refined_pixel_box = None
+            if box_1000 and len(box_1000) == 4:
+                ymin, xmin, ymax, xmax = box_1000
+                refined_pixel_box = [
+                    max(0, int(xmin * w / 1000)),
+                    max(0, int(ymin * h / 1000)),
+                    min(w, int(xmax * w / 1000)),
+                    min(h, int(ymax * h / 1000)),
+                ]
+
+            return {
+                "success": True,
+                "is_valid_child": data.get("is_valid_child", False),
+                "confidence": data.get("confidence", 0.9),
+                "refined_box": refined_pixel_box,
+                "reason": data.get("reason", ""),
+            }
+        except Exception as e:
+            return {
+                "success": False,
+                "is_valid_child": candidate_box_xyxy is not None,
+                "confidence": 0.5,
+                "refined_box": candidate_box_xyxy,
+                "reason": f"Fallback: {str(e)[:60]}",
+            }
+
 
 # ─── Toddler Safety Edge Engine ─────────────────────────────────────────────
 class ToddlerSafetyEngine:

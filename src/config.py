@@ -19,6 +19,7 @@ SAMPLES_DIR = DATA_DIR / "samples"
 OUTPUTS_DIR = DATA_DIR / "outputs"
 ALERTS_DIR = DATA_DIR / "alerts"
 TESTS_DIR = BASE_DIR / "tests"
+ROOM_ZONES_FILE = DATA_DIR / "room_zones.json"
 
 # Ensure runtime directories exist
 ALERTS_DIR.mkdir(parents=True, exist_ok=True)

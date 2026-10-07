@@ -1,0 +1,30 @@
+{
+  "camera_id": "default_camera",
+  "child_name": "Toddler",
+  "updated_at": 1791301740.2453878,
+  "formatted_time": "2026-10-06 20:49:00",
+  "reference_resolution": {
+    "width": 612,
+    "height": 459
+  },
+  "hazard_count": 1,
+  "hazards": [
+    {
+      "id": "zone_1",
+      "label": "electrical sockets",
+      "risk": "high",
+      "box": [
+        483,
+        45,
+        569,
+        156
+      ],
+      "box_normalized": [
+        100,
+        790,
+        340,
+        930
+      ]
+    }
+  ]
+}
