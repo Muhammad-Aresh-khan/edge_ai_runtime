@@ -18,13 +18,8 @@ class SpatialDetail(BaseModel):
 
 class VLMVerificationDetail(BaseModel):
     enabled: bool
-    success: bool
-    child_detected: bool
-    is_real_danger: bool
-    verified_severity: str
-    verified_hazard: str
+    child_verified: bool
     explanation: str
-    extra_hazards: List[str] = []
     latency_sec: float
 
 
@@ -51,4 +46,28 @@ class FunnelAnalysisResponse(BaseModel):
     spatial_details: List[SpatialDetail] = []
     vlm_guardrail: Optional[VLMVerificationDetail] = None
     latencies: LatencyBreakdown
-    annotated_image_base64: Optional[str] = None
+
+
+class HazardZone(BaseModel):
+    id: str = "zone_1"
+    label: str
+    risk: str = "high"
+    box: List[int]  # [x1, y1, x2, y2]
+    box_normalized: Optional[List[int]] = None  # [ymin, xmin, ymax, xmax] (0 to 1000)
+
+
+class RoomSetupConfirmRequest(BaseModel):
+    camera_id: str = "default_camera"
+    child_name: str = "Toddler"
+    hazards: List[HazardZone]
+
+
+class RoomSetupResponse(BaseModel):
+    success: bool = True
+    camera_id: str
+    child_name: str
+    updated_at: float
+    formatted_time: str
+    hazard_count: int
+    hazards: List[HazardZone]
+    message: str
